@@ -1,0 +1,134 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes slide-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes tree-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes grow-bar {
+  from {
+    transform: scaleY(0);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+
+@utility animate-page {
+  animation: fade-up 220ms ease-out both;
+}
+
+@utility animate-fade {
+  animation: fade-in 160ms ease-out both;
+}
+
+@utility animate-pop {
+  animation: pop-in 180ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@utility animate-toast {
+  animation: slide-in-right 200ms ease-out both;
+}
+
+@utility animate-tree {
+  animation: tree-in 160ms ease-out both;
+}
+
+@utility animate-card {
+  animation: fade-up 260ms ease-out both;
+}
+
+@utility animate-bar {
+  transform-origin: bottom;
+  animation: grow-bar 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-page,
+  .animate-fade,
+  .animate-pop,
+  .animate-toast,
+  .animate-tree,
+  .animate-card,
+  .animate-bar {
+    animation: none !important;
+  }
+}
+
+.rdp-root {
+  --rdp-accent-color: #2563eb;
+  --rdp-accent-background-color: #dbeafe;
+  --rdp-day-width: 2.25rem;
+  --rdp-day-height: 2.25rem;
+  --rdp-months-gap: 1.5rem;
+  --rdp-selected-border: none;
+  --rdp-today-color: #2563eb;
+  font-size: 0.75rem;
+}
+
+.rdp-root .rdp-day_button {
+  border-radius: 0.5rem;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
