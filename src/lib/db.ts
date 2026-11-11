@@ -60,6 +60,17 @@ export async function insertDocument(doc: Doc, ignoreConflicts = false): Promise
   );
 }
 
+export async function setDocumentFile(
+  id: string,
+  file: { filename: string; rel_path: string; size_bytes: number; sha256: string },
+): Promise<void> {
+  const conn = await db();
+  await conn.execute(
+    "UPDATE documents SET filename = $1, rel_path = $2, size_bytes = $3, sha256 = $4 WHERE id = $5",
+    [file.filename, file.rel_path, file.size_bytes, file.sha256, id],
+  );
+}
+
 export async function deleteDocument(id: string): Promise<void> {
   const conn = await db();
   await conn.execute("DELETE FROM documents WHERE id = $1", [id]);

@@ -4,6 +4,7 @@ import {
   deleteDocument,
   findByHash,
   insertDocument,
+  setDocumentFile,
   type Doc,
   type LetterKind,
 } from "./db";
@@ -68,6 +69,30 @@ export async function importLetter({
 export async function readDocument(doc: Doc): Promise<Uint8Array> {
   const buffer = await invoke<ArrayBuffer>("read_doc_file", { relPath: doc.rel_path });
   return new Uint8Array(buffer);
+}
+
+/** Swaps the PDF behind an existing row. Metadata update stays with the caller. */
+export async function replaceDocumentFile(
+  doc: Doc,
+  path: string,
+): Promise<"replaced" | "same" | "duplicate"> {
+  const file = await invoke<ImportedFile>("import_pdf", { sourcePath: path });
+  if (file.sha256 === doc.sha256) {
+    await invoke("delete_doc_file", { relPath: file.rel_path });
+    return "same";
+  }
+  if (await findByHash(file.sha256)) {
+    await invoke("delete_doc_file", { relPath: file.rel_path });
+    return "duplicate";
+  }
+  try {
+    await setDocumentFile(doc.id, file);
+  } catch (error) {
+    await invoke("delete_doc_file", { relPath: file.rel_path });
+    throw error;
+  }
+  await invoke("delete_doc_file", { relPath: doc.rel_path });
+  return "replaced";
 }
 
 export async function saveDocumentCopy(doc: Doc): Promise<boolean> {

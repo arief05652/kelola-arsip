@@ -3,7 +3,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
 import { FileText, Loader2, Upload, X } from "lucide-react";
 import { updateDocument, type Doc, type LetterKind } from "../lib/db";
-import { importLetter } from "../lib/documents";
+import { importLetter, replaceDocumentFile } from "../lib/documents";
 
 type Props = {
   defaultKind: LetterKind;
@@ -42,7 +42,6 @@ export default function ImportDialog({
 
   // Tauri intercepts OS drag-and-drop, so the HTML5 drop event never fires.
   useEffect(() => {
-    if (editing) return;
     let unlisten: (() => void) | undefined;
     getCurrentWebview()
       .onDragDropEvent((event) => {
@@ -67,7 +66,7 @@ export default function ImportDialog({
       })
       .catch(() => undefined);
     return () => unlisten?.();
-  }, [editing]);
+  }, []);
 
   async function chooseFile() {
     const selected = await open({
@@ -86,6 +85,16 @@ export default function ImportDialog({
     setError(null);
     try {
       if (doc) {
+        let fileNote = "";
+        if (filePath) {
+          const result = await replaceDocumentFile(doc, filePath);
+          if (result === "duplicate") {
+            setError("File ini sudah ada di arsip");
+            setSaving(false);
+            return;
+          }
+          if (result === "replaced") fileNote = " dan file PDF";
+        }
         await updateDocument({
           ...doc,
           title: title.trim() || doc.title,
@@ -95,7 +104,7 @@ export default function ImportDialog({
           asal_surat: asalSurat.trim() || null,
           disposisi: disposisi.trim() || null,
         });
-        onImported("Perubahan dokumen disimpan");
+        onImported(`Perubahan dokumen${fileNote} disimpan`);
         onClose();
         return;
       }
@@ -230,45 +239,55 @@ export default function ImportDialog({
             />
           </label>
 
-          {editing && doc ? (
-            <p className="flex items-center gap-1.5 rounded-md bg-slate-50 px-2.5 py-2 text-[11px] text-slate-500">
-              <FileText className="size-3.5 shrink-0 text-blue-500" />
-              <span className="truncate">{doc.filename}</span>
-            </p>
-          ) : (
-            <div>
-              <span className="text-[11px] font-medium text-slate-500">File PDF</span>
-              <button
-                type="button"
-                onClick={chooseFile}
-                className={`mt-1 flex w-full flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed px-4 py-6 text-center transition-colors ${
-                  dragging
-                    ? "border-blue-400 bg-blue-50"
-                    : "border-slate-300 bg-slate-50/60 hover:border-blue-300 hover:bg-blue-50/40"
-                }`}
-              >
-                {fileName ? (
-                  <>
-                    <FileText className="size-5 text-blue-500" />
-                    <span className="max-w-full truncate text-xs font-medium text-slate-700">
-                      {fileName}
-                    </span>
-                    <span className="text-[10px] text-slate-400">Klik untuk memilih file lain</span>
-                  </>
-                ) : (
-                  <>
-                    <Upload className="size-5 text-slate-400" />
-                    <span className="text-xs font-medium text-slate-600">
-                      Tarik file PDF ke sini
-                    </span>
-                    <span className="text-[10px] text-slate-400">
-                      atau klik untuk membuka file manager
-                    </span>
-                  </>
-                )}
-              </button>
-            </div>
-          )}
+          <div>
+            <span className="text-[11px] font-medium text-slate-500">
+              File PDF
+              {editing && (
+                <span className="ml-1 font-normal text-slate-400">
+                  (biarkan kosong untuk tetap pakai file lama)
+                </span>
+              )}
+            </span>
+            <button
+              type="button"
+              onClick={chooseFile}
+              className={`mt-1 flex w-full flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed px-4 py-6 text-center transition-colors ${
+                dragging
+                  ? "border-blue-400 bg-blue-50"
+                  : "border-slate-300 bg-slate-50/60 hover:border-blue-300 hover:bg-blue-50/40"
+              }`}
+            >
+              {fileName ? (
+                <>
+                  <FileText className="size-5 text-blue-500" />
+                  <span className="max-w-full truncate text-xs font-medium text-slate-700">
+                    {fileName}
+                  </span>
+                  <span className="text-[10px] text-slate-400">Klik untuk memilih file lain</span>
+                </>
+              ) : editing && doc ? (
+                <>
+                  <FileText className="size-5 text-blue-500" />
+                  <span className="max-w-full truncate text-xs font-medium text-slate-700">
+                    {doc.filename}
+                  </span>
+                  <span className="text-[10px] text-slate-400">
+                    Klik atau tarik PDF untuk mengganti file
+                  </span>
+                </>
+              ) : (
+                <>
+                  <Upload className="size-5 text-slate-400" />
+                  <span className="text-xs font-medium text-slate-600">
+                    Tarik file PDF ke sini
+                  </span>
+                  <span className="text-[10px] text-slate-400">
+                    atau klik untuk membuka file manager
+                  </span>
+                </>
+              )}
+            </button>
+          </div>
 
           {error && <p className="text-[11px] text-rose-500">{error}</p>}
         </div>

@@ -42,7 +42,7 @@ export default function DocumentTable({
             <th className="px-3 py-2.5 font-medium">Perihal Surat</th>
             <th className="px-3 py-2.5 font-medium">Asal Surat</th>
             {showBidang && <th className="px-3 py-2.5 font-medium">Bidang</th>}
-            <th className="px-3 py-2.5 font-medium">Disposisi</th>
+            <th className="px-3 py-2.5 font-medium">{showBidang ? "Pengolah" : "Disposisi"}</th>
             <th className="px-4 py-2.5 text-right font-medium">Aksi</th>
           </tr>
         </thead>
