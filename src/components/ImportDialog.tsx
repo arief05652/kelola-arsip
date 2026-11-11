@@ -219,11 +219,13 @@ export default function ImportDialog({
           </div>
 
           <label className="block">
-            <span className="text-[11px] font-medium text-slate-500">Disposisi</span>
+            <span className="text-[11px] font-medium text-slate-500">
+              {kind === "keluar" ? "Pengolah" : "Disposisi"}
+            </span>
             <input
               value={disposisi}
               onChange={(event) => setDisposisi(event.target.value)}
-              placeholder="cth. Tindak lanjuti"
+              placeholder={kind === "keluar" ? "cth. Nama pengolah" : "cth. Tindak lanjuti"}
               className="mt-1 w-full rounded-md border border-slate-200 px-2.5 py-1.5 text-xs text-slate-700 outline-none placeholder:text-slate-400 focus:border-blue-400"
             />
           </label>
