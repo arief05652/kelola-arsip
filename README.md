@@ -9,7 +9,7 @@ Target rilis: **Windows**. Pengembangan sehari-hari: **Linux**.
 
 - **Dashboard** — 5 kartu statistik (surat masuk, surat keluar, total dokumen, bulan ini, ukuran arsip), grafik volume 10 bulan, tabel surat masuk terbaru, dan feed aktivitas.
 - **Surat Masuk / Surat Keluar** — impor PDF, pencarian judul/nama file, pratinjau, edit, simpan salinan, hapus.
-- **Pohon bidang** — di sidebar, Surat Keluar bisa disaring per Sekretaris, Bidang PIAK, atau Bidang Yanminduk.
+- **Pohon bidang** — di sidebar, Surat Keluar bisa disaring per Sekretariat, Bidang PIAK, atau Bidang Yanminduk.
 - **Laporan** — rekap 12 bulan terakhir, total penyimpanan, dan tombol Backup/Pulihkan (satu file ZIP berisi metadata + semua PDF).
 - **Pratinjau PDF** — buka dokumen di dalam aplikasi dengan pdf.js: navigasi halaman, zoom, `Esc` untuk menutup.
 - **Impor PDF** — file disalin ke folder arsip dengan nama `<uuid>.pdf`, deduplikasi SHA-256, batas 100 MB, penulisan atomik (temp lalu rename).

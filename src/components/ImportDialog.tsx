@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
 import { FileText, Loader2, Upload, X } from "lucide-react";
-import { updateDocument, type Doc, type LetterKind } from "../lib/db";
+import { insertDocument, updateDocument, type Doc, type LetterKind } from "../lib/db";
 import { importLetter, replaceDocumentFile } from "../lib/documents";
 
 type Props = {
@@ -109,7 +109,24 @@ export default function ImportDialog({
         return;
       }
       if (!filePath) {
-        setSaving(false);
+        // Metadata-only row: the PDF can be attached later through Edit.
+        const id = `dok-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+        await insertDocument({
+          id,
+          title: title.trim() || "Dokumen tanpa file",
+          filename: "",
+          rel_path: "",
+          kind,
+          size_bytes: 0,
+          sha256: `no-file:${id}`,
+          added_at: new Date().toISOString(),
+          nomor_surat: nomorSurat.trim() || null,
+          unit: unit.trim() || null,
+          asal_surat: asalSurat.trim() || null,
+          disposisi: disposisi.trim() || null,
+        });
+        onImported("Dokumen ditambahkan tanpa file PDF");
+        onClose();
         return;
       }
       const result = await importLetter({
@@ -209,7 +226,7 @@ export default function ImportDialog({
                   className="mt-1 w-full rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-700 outline-none focus:border-blue-400"
                 >
                   <option value="">Pilih bidang</option>
-                  <option value="Sekretaris">Sekretaris</option>
+                  <option value="Sekretariat">Sekretariat</option>
                   <option value="Bidang PIAK">Bidang PIAK</option>
                   <option value="Bidang Yanminduk">Bidang Yanminduk</option>
                 </select>
@@ -217,7 +234,9 @@ export default function ImportDialog({
             )}
 
             <label className={kind === "keluar" ? "block" : "col-span-2 block"}>
-              <span className="text-[11px] font-medium text-slate-500">Asal Surat</span>
+              <span className="text-[11px] font-medium text-slate-500">
+                {kind === "keluar" ? "Kepada" : "Asal Surat"}
+              </span>
               <input
                 value={asalSurat}
                 onChange={(event) => setAsalSurat(event.target.value)}
@@ -242,51 +261,68 @@ export default function ImportDialog({
           <div>
             <span className="text-[11px] font-medium text-slate-500">
               File PDF
-              {editing && (
-                <span className="ml-1 font-normal text-slate-400">
-                  (biarkan kosong untuk tetap pakai file lama)
-                </span>
-              )}
+              <span className="ml-1 font-normal text-slate-400">
+                {editing ? "(biarkan kosong untuk tetap pakai file lama)" : "(opsional)"}
+              </span>
             </span>
-            <button
-              type="button"
-              onClick={chooseFile}
-              className={`mt-1 flex w-full flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed px-4 py-6 text-center transition-colors ${
-                dragging
-                  ? "border-blue-400 bg-blue-50"
-                  : "border-slate-300 bg-slate-50/60 hover:border-blue-300 hover:bg-blue-50/40"
-              }`}
-            >
-              {fileName ? (
-                <>
-                  <FileText className="size-5 text-blue-500" />
-                  <span className="max-w-full truncate text-xs font-medium text-slate-700">
-                    {fileName}
-                  </span>
-                  <span className="text-[10px] text-slate-400">Klik untuk memilih file lain</span>
-                </>
-              ) : editing && doc ? (
-                <>
-                  <FileText className="size-5 text-blue-500" />
-                  <span className="max-w-full truncate text-xs font-medium text-slate-700">
-                    {doc.filename}
-                  </span>
-                  <span className="text-[10px] text-slate-400">
-                    Klik atau tarik PDF untuk mengganti file
-                  </span>
-                </>
-              ) : (
-                <>
-                  <Upload className="size-5 text-slate-400" />
-                  <span className="text-xs font-medium text-slate-600">
-                    Tarik file PDF ke sini
-                  </span>
-                  <span className="text-[10px] text-slate-400">
-                    atau klik untuk membuka file manager
-                  </span>
-                </>
+            <div className="relative mt-1">
+              <button
+                type="button"
+                onClick={chooseFile}
+                className={`flex w-full flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed px-4 py-6 text-center transition-colors ${
+                  dragging
+                    ? "border-blue-400 bg-blue-50"
+                    : "border-slate-300 bg-slate-50/60 hover:border-blue-300 hover:bg-blue-50/40"
+                }`}
+              >
+                {fileName ? (
+                  <>
+                    <FileText className="size-5 text-blue-500" />
+                    <span className="max-w-full truncate pr-6 text-xs font-medium text-slate-700">
+                      {fileName}
+                    </span>
+                    <span className="text-[10px] text-slate-400">
+                      Klik untuk memilih file lain, atau X untuk menghapus
+                    </span>
+                  </>
+                ) : editing && doc ? (
+                  <>
+                    <FileText className="size-5 text-blue-500" />
+                    <span className="max-w-full truncate text-xs font-medium text-slate-700">
+                      {doc.filename || "Belum ada file PDF"}
+                    </span>
+                    <span className="text-[10px] text-slate-400">
+                      Klik atau tarik PDF untuk{" "}
+                      {doc.filename ? "mengganti file" : "melampirkan file"}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <Upload className="size-5 text-slate-400" />
+                    <span className="text-xs font-medium text-slate-600">
+                      Tarik file PDF ke sini
+                    </span>
+                    <span className="text-[10px] text-slate-400">
+                      atau klik untuk membuka file manager
+                    </span>
+                  </>
+                )}
+              </button>
+              {fileName && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFilePath(null);
+                    setError(null);
+                  }}
+                  aria-label="Hapus file terpilih"
+                  title="Hapus file terpilih"
+                  className="absolute right-2 top-2 grid size-6 place-items-center rounded-full bg-rose-100 text-rose-600 transition-colors hover:bg-rose-200"
+                >
+                  <X className="size-3.5" />
+                </button>
               )}
-            </button>
+            </div>
           </div>
 
           {error && <p className="text-[11px] text-rose-500">{error}</p>}
@@ -303,7 +339,7 @@ export default function ImportDialog({
           <button
             type="button"
             onClick={submit}
-            disabled={(!editing && !filePath) || saving}
+            disabled={saving}
             className="flex items-center gap-1.5 rounded-md bg-emerald-500 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {saving && <Loader2 className="size-3.5 animate-spin" />}

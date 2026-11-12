@@ -95,6 +95,11 @@ export async function replaceDocumentFile(
   return "replaced";
 }
 
+/** Shows the stored PDF in the OS file explorer so it can be dragged elsewhere. */
+export async function revealDocumentFile(doc: Doc): Promise<void> {
+  await invoke("reveal_doc_file", { relPath: doc.rel_path });
+}
+
 export async function saveDocumentCopy(doc: Doc): Promise<boolean> {
   const destination = await save({
     defaultPath: doc.filename,
@@ -105,7 +110,15 @@ export async function saveDocumentCopy(doc: Doc): Promise<boolean> {
   return true;
 }
 
+/** Reads metadata rows from a backup zip without restoring anything. */
+export async function readBackupArchive(path: string): Promise<Doc[]> {
+  return invoke<Doc[]>("read_backup_archive", { sourcePath: path });
+}
+
 export async function removeDocument(doc: Doc): Promise<void> {
-  await invoke("delete_doc_file", { relPath: doc.rel_path });
+  // Metadata-only rows have no file to delete.
+  if (doc.rel_path) {
+    await invoke("delete_doc_file", { relPath: doc.rel_path });
+  }
   await deleteDocument(doc.id);
 }

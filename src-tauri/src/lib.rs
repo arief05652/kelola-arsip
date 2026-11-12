@@ -119,6 +119,20 @@ fn doc_path(app: tauri::AppHandle, rel_path: String) -> Result<String, String> {
     Ok(path.to_string_lossy().to_string())
 }
 
+/// Shows the stored PDF in the OS file explorer, selected and ready to drag.
+#[tauri::command]
+fn reveal_doc_file(app: tauri::AppHandle, rel_path: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let name = safe_file_name(&rel_path)?;
+    let path = documents_dir(&app)?.join(name);
+    if !path.is_file() {
+        return Err("File PDF tidak ditemukan".to_string());
+    }
+    app.opener()
+        .reveal_item_in_dir(&path)
+        .map_err(|e| format!("Gagal membuka folder: {e}"))
+}
+
 /// Returns the raw PDF bytes so the frontend can render it with pdf.js.
 #[tauri::command]
 fn read_doc_file(app: tauri::AppHandle, rel_path: String) -> Result<tauri::ipc::Response, String> {
@@ -216,6 +230,22 @@ fn restore_archive(app: tauri::AppHandle, source_path: String) -> Result<Vec<Bac
     unpack_archive(&documents_dir(&app)?, &source_path)
 }
 
+/// Reads only the metadata of a backup zip. Nothing is written to the archive.
+#[tauri::command]
+fn read_backup_archive(source_path: String) -> Result<Vec<BackupRow>, String> {
+    let file = fs::File::open(&source_path).map_err(|e| format!("Gagal membuka backup: {e}"))?;
+    let mut archive =
+        zip::ZipArchive::new(file).map_err(|e| format!("File backup tidak valid: {e}"))?;
+    let mut entry = archive
+        .by_name("data.json")
+        .map_err(|_| "Backup tidak berisi data.json".to_string())?;
+    let mut buffer = Vec::new();
+    entry
+        .read_to_end(&mut buffer)
+        .map_err(|e| format!("Gagal membaca data.json: {e}"))?;
+    serde_json::from_slice(&buffer).map_err(|e| format!("data.json rusak: {e}"))
+}
+
 fn unpack_archive(dir: &std::path::Path, source_path: &str) -> Result<Vec<BackupRow>, String> {
     let file = fs::File::open(source_path).map_err(|e| format!("Gagal membuka backup: {e}"))?;
     let mut archive = zip::ZipArchive::new(file)
@@ -234,6 +264,11 @@ fn unpack_archive(dir: &std::path::Path, source_path: &str) -> Result<Vec<Backup
 
     let mut restored = Vec::new();
     for row in rows {
+        // Metadata-only rows have no PDF to restore.
+        if row.rel_path.is_empty() {
+            restored.push(row);
+            continue;
+        }
         let Ok(name) = safe_file_name(&row.rel_path) else {
             continue;
         };
@@ -320,6 +355,12 @@ fn migrations() -> Vec<Migration> {
             sql: "ALTER TABLE documents ADD COLUMN disposisi TEXT;",
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 6,
+            description: "rename sekretaris unit to sekretariat",
+            sql: "UPDATE documents SET unit = 'Sekretariat' WHERE unit = 'Sekretaris';",
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -339,10 +380,12 @@ pub fn run() {
             doc_path,
             read_doc_file,
             doc_exists,
+            reveal_doc_file,
             copy_doc_to,
             documents_dir_path,
             backup_archive,
-            restore_archive
+            restore_archive,
+            read_backup_archive
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

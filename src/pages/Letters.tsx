@@ -25,8 +25,10 @@ const dayLabel = (date: Date) =>
     year: "numeric",
   }).format(date);
 
+
 export default function Letters({ kind, docs, unit = null, onImport, ...actions }: Props) {
   const [query, setQuery] = useState("");
+  const [sort, setSort] = useState<"asc" | "desc">("asc");
   const [range, setRange] = useState<DateRange | undefined>();
   const [draft, setDraft] = useState<DateRange | undefined>();
   const [calendarOpen, setCalendarOpen] = useState(false);
@@ -51,22 +53,36 @@ export default function Letters({ kind, docs, unit = null, onImport, ...actions 
   }, [calendarOpen]);
 
   const byKind = useMemo(
-    () => docs.filter((doc) => doc.kind === kind && (!unit || doc.unit === unit)),
+    () =>
+      docs
+        .filter((doc) => doc.kind === kind && (!unit || doc.unit === unit))
+        // Oldest first so a new document lands at the bottom with the next number.
+        .sort((a, b) => a.added_at.localeCompare(b.added_at)),
     [docs, kind, unit],
   );
+
+  // The number a row shows is its position in the archive order, so it stays
+  // the same when the table is filtered or sorted.
+  const numbering = useMemo(() => {
+    const map = new Map<string, number>();
+    byKind.forEach((doc, index) => map.set(doc.id, index + 1));
+    return map;
+  }, [byKind]);
 
   const filtered = useMemo(() => {
     const term = query.trim().toLowerCase();
     const start = range?.from ? dayKey(range.from) : "";
     const end = range?.to ? dayKey(range.to) : "";
-    return byKind.filter((doc) => {
+    const rows = byKind.filter((doc) => {
       const day = doc.added_at.slice(0, 10);
       if (start && day < start) return false;
       if (end && day > end) return false;
       if (!term) return true;
+      if (String(numbering.get(doc.id) ?? "").includes(term)) return true;
       return doc.title.toLowerCase().includes(term) || doc.filename.toLowerCase().includes(term);
     });
-  }, [byKind, query, range]);
+    return sort === "desc" ? rows.reverse() : rows;
+  }, [byKind, numbering, query, range, sort]);
 
   const baseTitle = kind === "masuk" ? "Surat Masuk" : "Surat Keluar";
   const title = unit ? `${baseTitle} — ${unit}` : baseTitle;
@@ -92,8 +108,8 @@ export default function Letters({ kind, docs, unit = null, onImport, ...actions 
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Cari dokumen..."
-              className="w-40 bg-transparent text-slate-700 outline-none placeholder:text-slate-400"
+              placeholder="Cari dokumen / no..."
+              className="w-48 bg-transparent text-slate-700 outline-none placeholder:text-slate-400"
             />
           </label>
 
@@ -172,7 +188,10 @@ export default function Letters({ kind, docs, unit = null, onImport, ...actions 
 
       <DocumentTable
         docs={filtered}
+        numbers={numbering}
         showBidang={kind === "keluar"}
+        sortDir={sort}
+        onSortNomor={setSort}
         emptyText={
           searching
             ? "Tidak ada dokumen yang cocok dengan pencarian."

@@ -1,21 +1,37 @@
-import { Download, Eye, Pencil, Trash2 } from "lucide-react";
+import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import {
+  ChevronDown,
+  ChevronUp,
+  Copy,
+  Download,
+  Eye,
+  FolderSearch,
+  Pencil,
+  Trash2,
+} from "lucide-react";
 import type { Doc } from "../lib/db";
 import { formatDate } from "../lib/format";
 
 type Props = {
   docs: Doc[];
   onOpen: (doc: Doc) => void;
+  onRevealFile: (doc: Doc) => void;
   onSave: (doc: Doc) => void;
   onEdit: (doc: Doc) => void;
   onDelete: (doc: Doc) => void;
+  onCopy: (doc: Doc, no: number) => void;
   emptyText: string;
   showBidang?: boolean;
+  numbers?: Map<string, number>;
+  sortDir?: "asc" | "desc" | null;
+  onSortNomor?: (dir: "asc" | "desc") => void;
 };
 
 const EMPTY = "—";
 
 const unitTone: Record<string, string> = {
-  Sekretaris: "bg-blue-50 text-blue-600",
+  Sekretariat: "bg-blue-50 text-blue-600",
   "Bidang PIAK": "bg-amber-50 text-amber-600",
   "Bidang Yanminduk": "bg-emerald-50 text-emerald-600",
 };
@@ -23,24 +39,84 @@ const unitTone: Record<string, string> = {
 export default function DocumentTable({
   docs,
   onOpen,
+  onRevealFile,
   onSave,
   onEdit,
   onDelete,
+  onCopy,
   emptyText,
   showBidang = false,
+  numbers,
+  sortDir = null,
+  onSortNomor,
 }: Props) {
   const columns = showBidang ? 8 : 7;
+  const [missing, setMissing] = useState<Set<string>>(new Set());
+
+  // A row counts as having a file only when the PDF is really on disk.
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all(
+      docs.map(async (doc) => {
+        if (!doc.rel_path) return [doc.id, false] as const;
+        const found = await invoke<boolean>("doc_exists", { relPath: doc.rel_path }).catch(
+          () => false,
+        );
+        return [doc.id, found] as const;
+      }),
+    ).then((pairs) => {
+      if (cancelled) return;
+      setMissing(new Set(pairs.filter(([, found]) => !found).map(([id]) => id)));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [docs]);
 
   return (
     <div className="overflow-x-auto">
       <table className="w-full min-w-[860px] border-collapse text-left text-xs">
         <thead>
           <tr className="border-y border-slate-100 bg-slate-50/70 text-[11px] text-slate-500">
-            <th className="w-12 px-4 py-2.5 font-medium">No</th>
+            <th className="w-16 px-4 py-2.5 font-medium">
+              <span className="flex items-center gap-0.5">
+                No
+                {onSortNomor && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => onSortNomor("asc")}
+                      aria-label="Urutkan nomor surat dari terkecil"
+                      title="Urutkan nomor surat: kecil ke besar"
+                      className={`grid size-4 place-items-center rounded ${
+                        sortDir === "asc"
+                          ? "bg-blue-100 text-blue-600"
+                          : "text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                      }`}
+                    >
+                      <ChevronUp className="size-3" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onSortNomor("desc")}
+                      aria-label="Urutkan nomor surat dari terbesar"
+                      title="Urutkan nomor surat: besar ke kecil"
+                      className={`grid size-4 place-items-center rounded ${
+                        sortDir === "desc"
+                          ? "bg-blue-100 text-blue-600"
+                          : "text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                      }`}
+                    >
+                      <ChevronDown className="size-3" />
+                    </button>
+                  </>
+                )}
+              </span>
+            </th>
             <th className="px-3 py-2.5 font-medium">Tanggal Surat</th>
             <th className="px-3 py-2.5 font-medium">Nomor Surat</th>
             <th className="px-3 py-2.5 font-medium">Perihal Surat</th>
-            <th className="px-3 py-2.5 font-medium">Asal Surat</th>
+            <th className="px-3 py-2.5 font-medium">{showBidang ? "Kepada" : "Asal Surat"}</th>
             {showBidang && <th className="px-3 py-2.5 font-medium">Bidang</th>}
             <th className="px-3 py-2.5 font-medium">{showBidang ? "Pengolah" : "Disposisi"}</th>
             <th className="px-4 py-2.5 text-right font-medium">Aksi</th>
@@ -56,7 +132,19 @@ export default function DocumentTable({
           )}
           {docs.map((doc, index) => (
             <tr key={doc.id} className="transition-colors hover:bg-slate-50/60">
-              <td className="px-4 py-3 text-slate-400">{index + 1}</td>
+              <td className="px-4 py-3 text-slate-400">
+                <span className="flex items-center gap-1.5">
+                  <span
+                    title={missing.has(doc.id) ? "Tanpa file PDF" : "File PDF tersedia"}
+                    aria-label={missing.has(doc.id) ? "Tanpa file PDF" : "File PDF tersedia"}
+                    role="img"
+                    className={`size-2 shrink-0 rounded-full ${
+                      missing.has(doc.id) ? "bg-rose-500" : "bg-emerald-500"
+                    }`}
+                  />
+                  {numbers?.get(doc.id) ?? index + 1}
+                </span>
+              </td>
               <td className="whitespace-nowrap px-3 py-3 text-slate-500">
                 {formatDate(doc.added_at)}
               </td>
@@ -101,12 +189,30 @@ export default function DocumentTable({
                   </button>
                   <button
                     type="button"
+                    onClick={() => onRevealFile(doc)}
+                    aria-label={`Tampilkan ${doc.title} di folder`}
+                    title="Tampilkan di folder, lalu drag ke WhatsApp"
+                    className="grid size-6 place-items-center rounded-md bg-indigo-50 text-indigo-600 transition-colors hover:bg-indigo-100"
+                  >
+                    <FolderSearch className="size-3.5" />
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => onSave(doc)}
                     aria-label={`Simpan salinan ${doc.title}`}
                     title="Simpan salinan"
                     className="grid size-6 place-items-center rounded-md bg-emerald-50 text-emerald-600 transition-colors hover:bg-emerald-100"
                   >
                     <Download className="size-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onCopy(doc, numbers?.get(doc.id) ?? index + 1)}
+                    aria-label={`Salin metadata ${doc.title}`}
+                    title="Salin metadata"
+                    className="grid size-6 place-items-center rounded-md bg-slate-100 text-slate-600 transition-colors hover:bg-slate-200"
+                  >
+                    <Copy className="size-3.5" />
                   </button>
                   <button
                     type="button"

@@ -1,7 +1,7 @@
-import { Download, Loader2, Upload } from "lucide-react";
+import { Download, FolderOpen, Loader2, Trash2, Upload } from "lucide-react";
 import type { Doc } from "../lib/db";
 import { formatBytes } from "../lib/format";
-import { countByKind, monthSeries, totalBytes } from "../lib/stats";
+import { countByKind, totalBytes, yearSeries } from "../lib/stats";
 
 const longLabel = (key: string) =>
   new Intl.DateTimeFormat("id-ID", { month: "long", year: "numeric" }).format(
@@ -13,10 +13,20 @@ type Props = {
   busy: boolean;
   onBackup: () => void;
   onRestore: () => void;
+  onPurge: () => void;
+  onOpenBackup: () => void;
 };
 
-export default function Report({ docs, busy, onBackup, onRestore }: Props) {
-  const rows = monthSeries(docs, 12)
+export default function Report({
+  docs,
+  busy,
+  onBackup,
+  onRestore,
+  onPurge,
+  onOpenBackup,
+}: Props) {
+  const year = new Date().getFullYear();
+  const rows = yearSeries(docs, year)
     .map((bucket) => ({
       ...bucket,
       label: longLabel(bucket.key),
@@ -62,7 +72,36 @@ export default function Report({ docs, busy, onBackup, onRestore }: Props) {
             <Upload className="size-3.5" />
             Pulihkan
           </button>
+          <button
+            type="button"
+            onClick={onPurge}
+            disabled={busy || docs.length === 0}
+            title="Hapus seluruh data surat untuk mulai dari awal tahun"
+            className="flex items-center gap-1.5 rounded-md bg-rose-50 px-3 py-1.5 text-[11px] font-semibold text-rose-600 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <Trash2 className="size-3.5" />
+            Hapus Semua Data
+          </button>
         </div>
+      </section>
+
+      <section className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div>
+          <h2 className="text-sm font-semibold text-slate-800">Lihat Backup Tahun Sebelumnya</h2>
+          <p className="mt-1 text-xs text-slate-400">
+            Buka file ZIP hasil backup untuk melihat data lamanya, termasuk nomor surat. Arsip yang
+            sekarang tidak berubah dan tidak ada data yang dipulihkan.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onOpenBackup}
+          disabled={busy}
+          className="flex items-center gap-1.5 rounded-md bg-slate-100 px-3 py-1.5 text-[11px] font-semibold text-slate-700 hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          <FolderOpen className="size-3.5" />
+          Buka Backup (.zip)
+        </button>
       </section>
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -85,9 +124,9 @@ export default function Report({ docs, busy, onBackup, onRestore }: Props) {
 
       <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
         <header className="p-4">
-          <h2 className="text-sm font-semibold text-slate-800">Laporan 12 Bulan Terakhir</h2>
+          <h2 className="text-sm font-semibold text-slate-800">Laporan Tahun {year}</h2>
           <p className="mt-1 text-xs text-slate-400">
-            Jumlah dokumen yang diimpor per bulan
+            Jumlah dokumen yang diimpor per bulan, Januari sampai Desember {year}
           </p>
         </header>
 

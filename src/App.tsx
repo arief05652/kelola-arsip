@@ -2,11 +2,13 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { confirm, open, save } from "@tauri-apps/plugin-dialog";
 import ImportDialog from "./components/ImportDialog";
+import BackupViewer from "./components/BackupViewer";
 import PdfViewer from "./components/PdfViewer";
 import Sidebar from "./components/Sidebar";
 import Toast from "./components/Toast";
 import { insertDocument, listDocuments, type Doc, type LetterKind } from "./lib/db";
-import { removeDocument, saveDocumentCopy } from "./lib/documents";
+import { removeDocument, readBackupArchive, revealDocumentFile, saveDocumentCopy } from "./lib/documents";
+import { formatDate } from "./lib/format";
 import type { DocActions, Page } from "./lib/types";
 import Dashboard from "./pages/Dashboard";
 import Letters from "./pages/Letters";
@@ -27,6 +29,7 @@ export default function App() {
   const [editingDoc, setEditingDoc] = useState<Doc | null>(null);
   const [viewingDoc, setViewingDoc] = useState<Doc | null>(null);
   const [busy, setBusy] = useState(false);
+  const [backupPreview, setBackupPreview] = useState<{ name: string; rows: Doc[] } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -40,9 +43,17 @@ export default function App() {
   const actions: DocActions = useMemo(
     () => ({
       onOpen: (doc) => {
+        if (!doc.rel_path) {
+          setToast("Dokumen ini belum punya file PDF");
+          return;
+        }
         setViewingDoc(doc);
       },
       onSave: (doc) => {
+        if (!doc.rel_path) {
+          setToast("Dokumen ini belum punya file PDF");
+          return;
+        }
         saveDocumentCopy(doc)
           .then((saved) => {
             if (saved) setToast("Salinan dokumen disimpan");
@@ -51,6 +62,34 @@ export default function App() {
       },
       onEdit: (doc) => {
         setEditingDoc(doc);
+      },
+      onRevealFile: (doc) => {
+        if (!doc.rel_path) {
+          setToast("Dokumen ini belum punya file PDF");
+          return;
+        }
+        revealDocumentFile(doc).catch((error) =>
+          setToast(`Gagal membuka folder: ${String(error)}`),
+        );
+      },
+      onCopy: (doc, no) => {
+        void (async () => {
+          const lines = [
+            `No: ${no}`,
+            `Tanggal: ${formatDate(doc.added_at)}`,
+            `Nomor Surat: ${doc.nomor_surat ?? "-"}`,
+            `Perihal: ${doc.title}`,
+            `${doc.kind === "keluar" ? "Kepada" : "Asal Surat"}: ${doc.asal_surat ?? "-"}`,
+          ];
+          if (doc.unit) lines.push(`Bidang: ${doc.unit}`);
+          lines.push(`${doc.kind === "keluar" ? "Pengolah" : "Disposisi"}: ${doc.disposisi ?? "-"}`);
+          try {
+            await navigator.clipboard.writeText(lines.join("\n"));
+            setToast("Metadata disalin ke clipboard");
+          } catch (error) {
+            setToast(`Gagal menyalin: ${String(error)}`);
+          }
+        })();
       },
       onDelete: (doc) => {
         void (async () => {
@@ -104,6 +143,62 @@ export default function App() {
       setToast(`Backup selesai: ${packed} file PDF`);
     } catch (error) {
       setToast(`Gagal backup: ${String(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  const handlePurge = useCallback(async () => {
+    const warned = await confirm(
+      "Hapus seluruh data surat? Semua metadata dan file PDF akan dihapus permanen dan tidak bisa dikembalikan. Buat backup terlebih dahulu lewat tombol Backup.",
+      {
+        title: "Hapus semua data",
+        kind: "warning",
+        okLabel: "Saya sudah backup",
+        cancelLabel: "Batal",
+      },
+    );
+    if (!warned) return;
+
+    const approved = await confirm(
+      "Konfirmasi terakhir: seluruh surat masuk dan surat keluar akan dihapus sekarang. Lanjutkan?",
+      {
+        title: "Konfirmasi hapus semua data",
+        kind: "warning",
+        okLabel: "Hapus semua",
+        cancelLabel: "Batal",
+      },
+    );
+    if (!approved) return;
+
+    setBusy(true);
+    try {
+      const rows = await listDocuments();
+      for (const row of rows) {
+        await removeDocument(row);
+      }
+      await refresh();
+      setToast(`${rows.length} dokumen dihapus. Arsip siap dipakai dari awal.`);
+    } catch (error) {
+      setToast(`Gagal menghapus data: ${String(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  }, [refresh]);
+
+  const handleOpenBackup = useCallback(async () => {
+    const source = await open({
+      multiple: false,
+      filters: [{ name: "Arsip ZIP", extensions: ["zip"] }],
+    });
+    if (typeof source !== "string") return;
+
+    setBusy(true);
+    try {
+      const rows = await readBackupArchive(source);
+      setBackupPreview({ name: source.split(/[\\/]/).pop() ?? source, rows });
+    } catch (error) {
+      setToast(`Gagal membuka backup: ${String(error)}`);
     } finally {
       setBusy(false);
     }
@@ -184,6 +279,8 @@ export default function App() {
                 busy={busy}
                 onBackup={handleBackup}
                 onRestore={handleRestore}
+                onPurge={handlePurge}
+                onOpenBackup={handleOpenBackup}
               />
             )}
           </div>
@@ -215,6 +312,14 @@ export default function App() {
       )}
 
       {viewingDoc && <PdfViewer doc={viewingDoc} onClose={() => setViewingDoc(null)} />}
+
+      {backupPreview && (
+        <BackupViewer
+          name={backupPreview.name}
+          rows={backupPreview.rows}
+          onClose={() => setBackupPreview(null)}
+        />
+      )}
 
       <Toast message={toast} onDismiss={() => setToast(null)} />
     </div>
