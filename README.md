@@ -8,9 +8,9 @@ Target rilis: **Windows**. Pengembangan sehari-hari: **Linux**.
 ## Fitur
 
 - **Dashboard** — 5 kartu statistik (surat masuk, surat keluar, total dokumen, bulan ini, ukuran arsip), grafik volume 10 bulan, tabel surat masuk terbaru, dan feed aktivitas.
-- **Surat Masuk / Surat Keluar** — impor PDF, pencarian judul/nama file, pratinjau, edit, simpan salinan, hapus.
+- **Surat Masuk / Surat Keluar** — impor PDF, pencarian judul/nama file/nomor baris, filter tanggal, paginasi, pratinjau, edit, simpan salinan, hapus.
 - **Pohon bidang** — di sidebar, Surat Keluar bisa disaring per Sekretariat, Bidang PIAK, atau Bidang Yanminduk.
-- **Laporan** — rekap 12 bulan terakhir, total penyimpanan, dan tombol Backup/Pulihkan (satu file ZIP berisi metadata + semua PDF).
+- **Laporan** — rekap bulan Januari–Desember tahun berjalan (10 baris per halaman), total penyimpanan, dan tombol Backup/Pulihkan (satu file ZIP berisi metadata + semua PDF).
 - **Pratinjau PDF** — buka dokumen di dalam aplikasi dengan pdf.js: navigasi halaman, zoom, `Esc` untuk menutup.
 - **Impor PDF** — file disalin ke folder arsip dengan nama `<uuid>.pdf`, deduplikasi SHA-256, batas 100 MB, penulisan atomik (temp lalu rename).
 - **Tanpa data mock** — semua angka dihitung dari isi database. Arsip kosong menampilkan empty state.
@@ -178,15 +178,17 @@ Menambah plugin butuh **tiga** suntingan: `src-tauri/Cargo.toml`, `.plugin(...)`
 | Data | Linux | Windows |
 |---|---|---|
 | Database | `~/.config/com.kelola-arsip/kelola-arsip.db` | `%APPDATA%\com.kelola-arsip\kelola-arsip.db` |
-| PDF | `~/Documents/KelolaArsip/` | `%USERPROFILE%\Documents\KelolaArsip\` |
+| PDF | `~/.local/share/com.kelola-arsip/arsip/` | `%APPDATA%\com.kelola-arsip\arsip\` |
 
 Skema dibuat oleh migrasi versi 1 di `lib.rs`. Untuk mengubah skema, tambahkan migrasi baru dan naikkan versinya — jangan ubah migrasi lama.
 
-Kolom tabel `documents`: `id, title, filename, rel_path, kind, size_bytes, sha256, added_at`. `sha256` UNIQUE, dipakai untuk deduplikasi.
+Versi lama menyimpan PDF di `Documents/KelolaArsip`. Saat aplikasi dibuka, PDF di folder itu dipindahkan otomatis ke folder `arsip` di atas; file non-PDF tidak disentuh.
+
+Kolom tabel `documents`: `id, title, filename, rel_path, kind, size_bytes, sha256, added_at, nomor_surat, unit, asal_surat, disposisi, tanggal_surat`. `sha256` UNIQUE, dipakai untuk deduplikasi. `tanggal_surat` adalah tanggal di surat (opsional); kalau kosong, tanggal impor dipakai. Nomor baris dihitung dari posisi urutan arsip (tanggal surat, lalu tanggal impor), jadi nomor bergeser kalau ada dokumen dihapus.
 
 Menghapus dokumen menghapus file PDF-nya secara permanen, tanpa tempat sampah.
 
-**Backup:** tombol Backup di halaman Laporan menyalin seluruh metadata ke `data.json` dan semua PDF ke `files/<uuid>.pdf` di dalam satu file ZIP. Proses ini hanya membaca file asli; tidak ada file yang dipindahkan atau dihapus. Pulihkan membaca ZIP yang sama: PDF yang belum ada disalin ke folder arsip, PDF yang hash-nya tidak cocok dengan metadata ditimpa dari ZIP, dan baris yang sudah ada dilewati (`INSERT OR IGNORE`).
+**Backup:** tombol Backup di halaman Laporan menyalin seluruh metadata ke `data.json` (`{"version":1,"rows":[...]}`) dan semua PDF ke `files/<uuid>.pdf` di dalam satu file ZIP. ZIP ditulis ke `<tujuan>.tmp` lalu di-rename, jadi backup yang gagal tidak meninggalkan file rusak. Proses ini hanya membaca file asli; tidak ada file yang dipindahkan atau dihapus. Pulihkan membaca ZIP yang sama: PDF yang belum ada disalin ke folder arsip, PDF yang hash-nya tidak cocok dengan metadata ditimpa dari ZIP, baris tanpa PDF tetap dipulihkan sebagai dokumen tanpa file, dan baris yang sudah ada dilewati (`INSERT OR IGNORE`). Tombol Bersihkan File menghapus PDF di folder arsip yang tidak dipakai baris mana pun.
 
 ## Troubleshooting
 

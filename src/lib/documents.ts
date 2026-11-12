@@ -4,6 +4,7 @@ import {
   deleteDocument,
   findByHash,
   insertDocument,
+  listDocuments,
   setDocumentFile,
   type Doc,
   type LetterKind,
@@ -24,6 +25,7 @@ export type ImportInput = {
   unit: string;
   asalSurat: string;
   disposisi: string;
+  tanggalSurat: string;
   kind: LetterKind;
 };
 
@@ -34,10 +36,21 @@ export async function importLetter({
   unit,
   asalSurat,
   disposisi,
+  tanggalSurat,
   kind,
-}: ImportInput): Promise<"added" | "skipped"> {
+}: ImportInput): Promise<"added" | "skipped" | "restored"> {
   const file = await invoke<ImportedFile>("import_pdf", { sourcePath: path });
-  if (await findByHash(file.sha256)) {
+  const existing = await findByHash(file.sha256);
+  if (existing) {
+    // The row already knows this PDF. If its file was deleted outside the app,
+    // put the new copy back on that row instead of refusing the import.
+    const stillThere = existing.rel_path
+      ? await invoke<boolean>("doc_exists", { relPath: existing.rel_path }).catch(() => false)
+      : false;
+    if (!stillThere) {
+      await setDocumentFile(existing.id, file);
+      return "restored";
+    }
     // The copy already landed on disk; drop it, the archive keeps one copy.
     await invoke("delete_doc_file", { relPath: file.rel_path });
     return "skipped";
@@ -58,6 +71,7 @@ export async function importLetter({
       unit: unit.trim() || null,
       asal_surat: asalSurat.trim() || null,
       disposisi: disposisi.trim() || null,
+      tanggal_surat: tanggalSurat || null,
     });
   } catch (error) {
     await invoke("delete_doc_file", { relPath: file.rel_path });
@@ -78,8 +92,16 @@ export async function replaceDocumentFile(
 ): Promise<"replaced" | "same" | "duplicate"> {
   const file = await invoke<ImportedFile>("import_pdf", { sourcePath: path });
   if (file.sha256 === doc.sha256) {
-    await invoke("delete_doc_file", { relPath: file.rel_path });
-    return "same";
+    // Same content, but the stored file may have been deleted outside the app.
+    const stillThere = doc.rel_path
+      ? await invoke<boolean>("doc_exists", { relPath: doc.rel_path }).catch(() => false)
+      : false;
+    if (stillThere) {
+      await invoke("delete_doc_file", { relPath: file.rel_path });
+      return "same";
+    }
+    await setDocumentFile(doc.id, file);
+    return "replaced";
   }
   if (await findByHash(file.sha256)) {
     await invoke("delete_doc_file", { relPath: file.rel_path });
@@ -91,7 +113,10 @@ export async function replaceDocumentFile(
     await invoke("delete_doc_file", { relPath: file.rel_path });
     throw error;
   }
-  await invoke("delete_doc_file", { relPath: doc.rel_path });
+  // A metadata-only row has no old file to remove.
+  if (doc.rel_path) {
+    await invoke("delete_doc_file", { relPath: doc.rel_path });
+  }
   return "replaced";
 }
 
@@ -116,9 +141,17 @@ export async function readBackupArchive(path: string): Promise<Doc[]> {
 }
 
 export async function removeDocument(doc: Doc): Promise<void> {
-  // Metadata-only rows have no file to delete.
-  if (doc.rel_path) {
-    await invoke("delete_doc_file", { relPath: doc.rel_path });
-  }
+  // Delete the row first: if the DB fails, the PDF is still there to retry.
   await deleteDocument(doc.id);
+  // Metadata-only rows have no file to delete. A leftover file is cleaned up later.
+  if (doc.rel_path) {
+    await invoke("delete_doc_file", { relPath: doc.rel_path }).catch(() => undefined);
+  }
+}
+
+/** Deletes PDFs in the archive folder that no row references any more. */
+export async function cleanupOrphanFiles(): Promise<number> {
+  const docs = await listDocuments();
+  const keep = docs.map((doc) => doc.rel_path).filter(Boolean);
+  return invoke<number>("cleanup_orphan_files", { keep });
 }

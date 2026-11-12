@@ -1,11 +1,12 @@
 {
   "name": "kelola-arsip",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "test": "bun test",
     "preview": "vite preview",
     "tauri": "tauri"
   },

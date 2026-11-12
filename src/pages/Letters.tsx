@@ -3,7 +3,9 @@ import { CalendarDays, ChevronDown, Plus, Search } from "lucide-react";
 import { DayPicker, type DateRange } from "react-day-picker";
 import { id as localeId } from "react-day-picker/locale";
 import DocumentTable from "../components/DocumentTable";
+import Pagination from "../components/Pagination";
 import type { Doc, LetterKind } from "../lib/db";
+import { docDay, sortByDate } from "../lib/docs";
 import type { DocActions } from "../lib/types";
 
 type Props = DocActions & {
@@ -32,6 +34,8 @@ export default function Letters({ kind, docs, unit = null, onImport, ...actions 
   const [range, setRange] = useState<DateRange | undefined>();
   const [draft, setDraft] = useState<DateRange | undefined>();
   const [calendarOpen, setCalendarOpen] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   const pickerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -52,17 +56,17 @@ export default function Letters({ kind, docs, unit = null, onImport, ...actions 
     };
   }, [calendarOpen]);
 
-  const byKind = useMemo(
-    () =>
-      docs
-        .filter((doc) => doc.kind === kind && (!unit || doc.unit === unit))
-        // Oldest first so a new document lands at the bottom with the next number.
-        .sort((a, b) => a.added_at.localeCompare(b.added_at)),
-    [docs, kind, unit],
+  const kindDocs = useMemo(
+    () => sortByDate(docs.filter((doc) => doc.kind === kind)),
+    [docs, kind],
   );
 
-  // The number a row shows is its position in the archive order, so it stays
-  // the same when the table is filtered or sorted.
+  const byKind = useMemo(
+    () => (unit ? kindDocs.filter((doc) => doc.unit === unit) : kindDocs),
+    [kindDocs, unit],
+  );
+
+  // Number = position in the archive order; it shifts when a row is deleted.
   const numbering = useMemo(() => {
     const map = new Map<string, number>();
     byKind.forEach((doc, index) => map.set(doc.id, index + 1));
@@ -74,7 +78,7 @@ export default function Letters({ kind, docs, unit = null, onImport, ...actions 
     const start = range?.from ? dayKey(range.from) : "";
     const end = range?.to ? dayKey(range.to) : "";
     const rows = byKind.filter((doc) => {
-      const day = doc.added_at.slice(0, 10);
+      const day = docDay(doc);
       if (start && day < start) return false;
       if (end && day > end) return false;
       if (!term) return true;
@@ -83,6 +87,10 @@ export default function Letters({ kind, docs, unit = null, onImport, ...actions 
     });
     return sort === "desc" ? rows.reverse() : rows;
   }, [byKind, numbering, query, range, sort]);
+
+  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const safePage = Math.min(page, pageCount);
+  const visible = filtered.slice((safePage - 1) * pageSize, safePage * pageSize);
 
   const baseTitle = kind === "masuk" ? "Surat Masuk" : "Surat Keluar";
   const title = unit ? `${baseTitle} — ${unit}` : baseTitle;
@@ -187,7 +195,7 @@ export default function Letters({ kind, docs, unit = null, onImport, ...actions 
       </header>
 
       <DocumentTable
-        docs={filtered}
+        docs={visible}
         numbers={numbering}
         showBidang={kind === "keluar"}
         sortDir={sort}
@@ -200,6 +208,20 @@ export default function Letters({ kind, docs, unit = null, onImport, ...actions 
               : `Belum ada ${baseTitle.toLowerCase()}. Klik Tambah untuk mengimpor PDF.`
         }
         {...actions}
+      />
+
+      <Pagination
+        page={safePage}
+        pageCount={pageCount}
+        onPage={setPage}
+        shown={visible.length}
+        total={filtered.length}
+        start={(safePage - 1) * pageSize + 1}
+        pageSize={pageSize}
+        onPageSize={(size) => {
+          setPageSize(size);
+          setPage(1);
+        }}
       />
     </section>
   );

@@ -11,11 +11,28 @@ export function formatBytes(bytes: number): string {
 }
 
 export function formatDate(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "—";
   return new Intl.DateTimeFormat("id-ID", {
     day: "2-digit",
     month: "short",
     year: "numeric",
-  }).format(new Date(iso));
+  }).format(date);
+}
+
+/** Formats a date-only value (`YYYY-MM-DD`) in local time. */
+export function formatLetterDate(day: string): string {
+  return formatDate(`${day}T00:00:00`);
+}
+
+/** Local calendar day as yyyy-mm-dd. `added_at` is stored in UTC, so a plain
+ * slice of the ISO string would land on the wrong day before 07:00 WIB. */
+export function localDay(value: string | Date): string {
+  const date = typeof value === "string" ? new Date(value) : value;
+  if (Number.isNaN(date.getTime())) return "";
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(
+    date.getDate(),
+  ).padStart(2, "0")}`;
 }
 
 export function timeAgo(iso: string): string {

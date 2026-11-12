@@ -7,19 +7,75 @@ use tauri_plugin_sql::{Migration, MigrationKind};
 use uuid::Uuid;
 
 const MAX_PDF_BYTES: u64 = 100 * 1024 * 1024;
+const MAX_METADATA_BYTES: u64 = 16 * 1024 * 1024;
+const ARCHIVE_SUBDIR: &str = "arsip";
 
 fn documents_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    // document_dir() can fail on Linux when xdg-user-dirs is not configured;
-    // fall back to ~/Documents so import still works on a dev machine.
-    let base = app.path().document_dir().or_else(|_| {
-        app.path()
-            .home_dir()
-            .map(|home| home.join("Documents"))
-    });
-    let base = base.map_err(|e| format!("Folder Documents tidak ditemukan: {e}"))?;
-    let dir = base.join("KelolaArsip");
+    // PDFs live in the app data folder, not in Documents, so they are not mixed
+    // with the user's own files and are less likely to be deleted by accident.
+    let base = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Folder data aplikasi tidak ditemukan: {e}"))?;
+    let dir = base.join(ARCHIVE_SUBDIR);
     fs::create_dir_all(&dir).map_err(|e| format!("Gagal membuat folder arsip: {e}"))?;
     Ok(dir)
+}
+
+/// Where PDFs were stored before version 0.1.5.
+fn legacy_documents_dir(app: &tauri::AppHandle) -> Option<PathBuf> {
+    let base = app
+        .path()
+        .document_dir()
+        .or_else(|_| app.path().home_dir().map(|home| home.join("Documents")))
+        .ok()?;
+    Some(base.join("KelolaArsip"))
+}
+
+/// Moves PDFs out of the old Documents folder. Runs once at startup.
+fn migrate_pdfs(app: &tauri::AppHandle) -> Result<u32, String> {
+    let Some(old) = legacy_documents_dir(app) else {
+        return Ok(0);
+    };
+    if !old.is_dir() {
+        return Ok(0);
+    }
+    let new = documents_dir(app)?;
+    if old == new {
+        return Ok(0);
+    }
+    let moved = move_pdfs(&old, &new)?;
+    // Drop the old folder when every PDF left it; other leftovers stay put.
+    let _ = fs::remove_dir(&old);
+    Ok(moved)
+}
+
+fn move_pdfs(old: &std::path::Path, new: &std::path::Path) -> Result<u32, String> {
+    let mut moved = 0;
+    let entries = fs::read_dir(old).map_err(|e| format!("Gagal membaca folder lama: {e}"))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("Gagal membaca folder lama: {e}"))?;
+        let path = entry.path();
+        let is_pdf = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.eq_ignore_ascii_case("pdf"))
+            .unwrap_or(false);
+        if !is_pdf || !path.is_file() {
+            continue;
+        }
+        let target = new.join(entry.file_name());
+        if target.exists() {
+            continue;
+        }
+        // Documents and AppData can live on different drives, so fall back to copy.
+        if fs::rename(&path, &target).is_err() {
+            fs::copy(&path, &target).map_err(|e| format!("Gagal memindahkan file: {e}"))?;
+            fs::remove_file(&path).map_err(|e| format!("Gagal menghapus file lama: {e}"))?;
+        }
+        moved += 1;
+    }
+    Ok(moved)
 }
 
 /// Rejects anything that is not a bare file name, so a stored path can never
@@ -161,6 +217,42 @@ fn documents_dir_path(app: tauri::AppHandle) -> Result<String, String> {
     Ok(documents_dir(&app)?.to_string_lossy().to_string())
 }
 
+/// Lists the PDF file names that are really in the archive folder.
+#[tauri::command]
+fn existing_doc_files(app: tauri::AppHandle) -> Result<Vec<String>, String> {
+    let dir = documents_dir(&app)?;
+    let mut names = Vec::new();
+    for entry in fs::read_dir(&dir).map_err(|e| format!("Gagal membaca folder arsip: {e}"))? {
+        let entry = entry.map_err(|e| format!("Gagal membaca folder arsip: {e}"))?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.to_ascii_lowercase().ends_with(".pdf") {
+            names.push(name);
+        }
+    }
+    Ok(names)
+}
+
+/// Deletes PDFs in the archive folder that no row points at any more.
+#[tauri::command]
+fn cleanup_orphan_files(app: tauri::AppHandle, keep: Vec<String>) -> Result<u32, String> {
+    remove_orphans(&documents_dir(&app)?, &keep)
+}
+
+fn remove_orphans(dir: &std::path::Path, keep: &[String]) -> Result<u32, String> {
+    let keep: std::collections::HashSet<&str> = keep.iter().map(String::as_str).collect();
+    let mut removed = 0;
+    for entry in fs::read_dir(dir).map_err(|e| format!("Gagal membaca folder arsip: {e}"))? {
+        let entry = entry.map_err(|e| format!("Gagal membaca folder arsip: {e}"))?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !name.to_ascii_lowercase().ends_with(".pdf") || keep.contains(name.as_str()) {
+            continue;
+        }
+        fs::remove_file(entry.path()).map_err(|e| format!("Gagal menghapus {name}: {e}"))?;
+        removed += 1;
+    }
+    Ok(removed)
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 struct BackupRow {
     id: String,
@@ -179,6 +271,41 @@ struct BackupRow {
     asal_surat: Option<String>,
     #[serde(default)]
     disposisi: Option<String>,
+    #[serde(default)]
+    tanggal_surat: Option<String>,
+    #[serde(default)]
+    no_urut: Option<i64>,
+}
+
+/// `data.json` is an object since backup format v1; older files are a bare array.
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum BackupFile {
+    V1 { version: u32, rows: Vec<BackupRow> },
+    Legacy(Vec<BackupRow>),
+}
+
+fn parse_backup(bytes: &[u8]) -> Result<Vec<BackupRow>, String> {
+    let file: BackupFile =
+        serde_json::from_slice(bytes).map_err(|e| format!("data.json rusak: {e}"))?;
+    let rows = match file {
+        BackupFile::V1 { version, rows } => {
+            if version > 1 {
+                return Err("Backup dibuat oleh versi aplikasi yang lebih baru".to_string());
+            }
+            rows
+        }
+        BackupFile::Legacy(rows) => rows,
+    };
+    for row in &rows {
+        if row.kind != "masuk" && row.kind != "keluar" {
+            return Err(format!("Backup berisi jenis surat tidak dikenal: {}", row.kind));
+        }
+        if row.added_at.len() < 10 {
+            return Err(format!("Backup berisi tanggal tidak valid untuk {}", row.id));
+        }
+    }
+    Ok(rows)
 }
 
 /// Writes `data.json` plus every PDF into one zip. Returns how many files were packed.
@@ -192,12 +319,39 @@ fn backup_archive(
 }
 
 fn pack_archive(dir: &std::path::Path, dest_path: &str, rows: &[BackupRow]) -> Result<u32, String> {
-    let file = fs::File::create(dest_path).map_err(|e| format!("Gagal membuat file backup: {e}"))?;
+    // Write next to the destination first, so an interrupted backup never leaves
+    // a truncated ZIP under the real name.
+    let tmp_path = PathBuf::from(format!("{dest_path}.tmp"));
+    let result = write_archive(&tmp_path, dir, rows);
+    let packed = match result {
+        Ok(packed) => packed,
+        Err(error) => {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(error);
+        }
+    };
+    if std::path::Path::new(dest_path).exists() {
+        fs::remove_file(dest_path).map_err(|e| format!("Gagal mengganti backup lama: {e}"))?;
+    }
+    if let Err(error) = fs::rename(&tmp_path, dest_path) {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(format!("Gagal menyimpan backup: {error}"));
+    }
+    Ok(packed)
+}
+
+fn write_archive(
+    path: &std::path::Path,
+    dir: &std::path::Path,
+    rows: &[BackupRow],
+) -> Result<u32, String> {
+    let file = fs::File::create(path).map_err(|e| format!("Gagal membuat file backup: {e}"))?;
     let mut zip = zip::ZipWriter::new(file);
     let options = zip::write::SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated);
 
-    let json = serde_json::to_vec_pretty(&rows).map_err(|e| format!("Gagal menulis metadata: {e}"))?;
+    let json = serde_json::to_vec_pretty(&serde_json::json!({ "version": 1, "rows": rows }))
+        .map_err(|e| format!("Gagal menulis metadata: {e}"))?;
     zip.start_file("data.json", options)
         .map_err(|e| format!("Gagal menulis data.json: {e}"))?;
     zip.write_all(&json)
@@ -239,11 +393,14 @@ fn read_backup_archive(source_path: String) -> Result<Vec<BackupRow>, String> {
     let mut entry = archive
         .by_name("data.json")
         .map_err(|_| "Backup tidak berisi data.json".to_string())?;
+    if entry.size() > MAX_METADATA_BYTES {
+        return Err("data.json di dalam backup terlalu besar".to_string());
+    }
     let mut buffer = Vec::new();
     entry
         .read_to_end(&mut buffer)
         .map_err(|e| format!("Gagal membaca data.json: {e}"))?;
-    serde_json::from_slice(&buffer).map_err(|e| format!("data.json rusak: {e}"))
+    parse_backup(&buffer)
 }
 
 fn unpack_archive(dir: &std::path::Path, source_path: &str) -> Result<Vec<BackupRow>, String> {
@@ -255,11 +412,14 @@ fn unpack_archive(dir: &std::path::Path, source_path: &str) -> Result<Vec<Backup
         let mut entry = archive
             .by_name("data.json")
             .map_err(|_| "Backup tidak berisi data.json".to_string())?;
+        if entry.size() > MAX_METADATA_BYTES {
+            return Err("data.json di dalam backup terlalu besar".to_string());
+        }
         let mut buffer = Vec::new();
         entry
             .read_to_end(&mut buffer)
             .map_err(|e| format!("Gagal membaca data.json: {e}"))?;
-        serde_json::from_slice(&buffer).map_err(|e| format!("data.json rusak: {e}"))?
+        parse_backup(&buffer)?
     };
 
     let mut restored = Vec::new();
@@ -281,6 +441,9 @@ fn unpack_archive(dir: &std::path::Path, source_path: &str) -> Result<Vec<Backup
         if !intact {
             let entry_name = format!("files/{name}");
             if let Ok(mut entry) = archive.by_name(&entry_name) {
+                if entry.size() > MAX_PDF_BYTES {
+                    return Err(format!("{name} di dalam backup melebihi 100 MB"));
+                }
                 let mut bytes = Vec::new();
                 entry
                     .read_to_end(&mut bytes)
@@ -293,7 +456,15 @@ fn unpack_archive(dir: &std::path::Path, source_path: &str) -> Result<Vec<Backup
                 }
                 fs::write(&target, &bytes).map_err(|e| format!("Gagal menulis {name}: {e}"))?;
             } else if !target.is_file() {
-                // Neither on disk nor in the archive: skip so no broken row is created.
+                // Neither on disk nor in the archive: keep the metadata as a
+                // file-less row instead of dropping the document silently.
+                restored.push(BackupRow {
+                    filename: String::new(),
+                    rel_path: String::new(),
+                    size_bytes: 0,
+                    sha256: format!("no-file:{}", row.id),
+                    ..row
+                });
                 continue;
             }
         }
@@ -361,6 +532,19 @@ fn migrations() -> Vec<Migration> {
             sql: "UPDATE documents SET unit = 'Sekretariat' WHERE unit = 'Sekretaris';",
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 7,
+            description: "add letter date and permanent row number",
+            sql: "ALTER TABLE documents ADD COLUMN tanggal_surat TEXT;
+            ALTER TABLE documents ADD COLUMN no_urut INTEGER;
+            UPDATE documents SET no_urut = (
+                SELECT COUNT(*) FROM documents d2
+                WHERE d2.kind = documents.kind
+                  AND (d2.added_at < documents.added_at
+                    OR (d2.added_at = documents.added_at AND d2.rowid <= documents.rowid))
+            );",
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -374,12 +558,20 @@ pub fn run() {
                 .add_migrations("sqlite:kelola-arsip.db", migrations())
                 .build(),
         )
+        .setup(|app| {
+            if let Err(error) = migrate_pdfs(app.handle()) {
+                eprintln!("Gagal memindahkan PDF lama: {error}");
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             import_pdf,
             delete_doc_file,
             doc_path,
             read_doc_file,
             doc_exists,
+            existing_doc_files,
+            cleanup_orphan_files,
             reveal_doc_file,
             copy_doc_to,
             documents_dir_path,
@@ -393,9 +585,13 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{pack_archive, safe_file_name, unpack_archive, BackupRow};
+    use super::{
+        move_pdfs, pack_archive, parse_backup, remove_orphans, safe_file_name, unpack_archive,
+        BackupRow,
+    };
     use sha2::Digest;
     use std::fs;
+    use std::io::Read;
 
     #[test]
     fn rejects_path_traversal() {
@@ -426,6 +622,8 @@ mod tests {
             unit: None,
             asal_surat: None,
             disposisi: Some("Tindak lanjuti".into()),
+            tanggal_surat: Some("2026-01-01".into()),
+            no_urut: Some(1),
         }
     }
 
@@ -479,6 +677,48 @@ mod tests {
     }
 
     #[test]
+    fn migration_moves_pdfs_and_keeps_other_files() {
+        let root = std::env::temp_dir().join(format!("kelola-arsip-{}", uuid::Uuid::new_v4()));
+        let old = root.join("old");
+        let new = root.join("new");
+        fs::create_dir_all(&old).unwrap();
+        fs::create_dir_all(&new).unwrap();
+        fs::write(old.join("a.pdf"), b"%PDF-1.4 a").unwrap();
+        fs::write(old.join("b.PDF"), b"%PDF-1.4 b").unwrap();
+        fs::write(old.join("catatan.txt"), b"bukan pdf").unwrap();
+
+        let moved = move_pdfs(&old, &new).unwrap();
+
+        assert_eq!(moved, 2);
+        assert!(new.join("a.pdf").is_file());
+        assert!(new.join("b.PDF").is_file());
+        assert!(!old.join("a.pdf").exists());
+        assert!(old.join("catatan.txt").is_file());
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn restore_keeps_metadata_when_the_pdf_is_missing() {
+        let root = std::env::temp_dir().join(format!("kelola-arsip-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let zip_path = root.join("backup.zip");
+
+        // The row points at a file that was already gone when the backup ran.
+        let packed = pack_archive(&root, zip_path.to_str().unwrap(), &[sample_row("missing.pdf")]);
+        assert_eq!(packed.unwrap(), 0);
+
+        let restored = unpack_archive(&root, zip_path.to_str().unwrap()).unwrap();
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored[0].title, "Surat Uji");
+        assert_eq!(restored[0].rel_path, "");
+        assert_eq!(restored[0].filename, "");
+        assert!(restored[0].sha256.starts_with("no-file:"));
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
     fn restore_repairs_a_corrupted_file() {
         let root = std::env::temp_dir().join(format!("kelola-arsip-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
@@ -493,6 +733,63 @@ mod tests {
 
         assert_eq!(restored.len(), 1);
         assert_eq!(fs::read(&pdf).unwrap(), b"%PDF-1.4 isi");
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn backup_writes_a_versioned_envelope() {
+        let root = std::env::temp_dir().join(format!("kelola-arsip-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let pdf = root.join("abc-123.pdf");
+        fs::write(&pdf, b"%PDF-1.4 isi").unwrap();
+        let zip_path = root.join("backup.zip");
+
+        pack_archive(&root, zip_path.to_str().unwrap(), &[sample_row("abc-123.pdf")]).unwrap();
+
+        let file = fs::File::open(&zip_path).unwrap();
+        let mut archive = zip::ZipArchive::new(file).unwrap();
+        let mut entry = archive.by_name("data.json").unwrap();
+        let mut buffer = Vec::new();
+        entry.read_to_end(&mut buffer).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&buffer).unwrap();
+
+        assert_eq!(json["version"], 1);
+        assert_eq!(json["rows"].as_array().unwrap().len(), 1);
+        assert!(!root.join("backup.zip.tmp").exists());
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn reads_a_legacy_backup_without_a_version() {
+        let legacy = serde_json::to_vec(&vec![sample_row("abc-123.pdf")]).unwrap();
+        let rows = parse_backup(&legacy).unwrap();
+        assert_eq!(rows.len(), 1);
+    }
+
+    #[test]
+    fn rejects_a_backup_with_an_unknown_kind() {
+        let mut row = sample_row("abc-123.pdf");
+        row.kind = "lain".into();
+        let bytes = serde_json::to_vec(&serde_json::json!({ "version": 1, "rows": [row] })).unwrap();
+        assert!(parse_backup(&bytes).is_err());
+    }
+
+    #[test]
+    fn cleanup_removes_only_unreferenced_pdfs() {
+        let root = std::env::temp_dir().join(format!("kelola-arsip-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("a.pdf"), b"%PDF-1.4 a").unwrap();
+        fs::write(root.join("b.pdf"), b"%PDF-1.4 b").unwrap();
+        fs::write(root.join("catatan.txt"), b"bukan pdf").unwrap();
+
+        let removed = remove_orphans(&root, &["a.pdf".to_string()]).unwrap();
+
+        assert_eq!(removed, 1);
+        assert!(root.join("a.pdf").is_file());
+        assert!(!root.join("b.pdf").exists());
+        assert!(root.join("catatan.txt").is_file());
 
         fs::remove_dir_all(&root).ok();
     }
