@@ -15,6 +15,7 @@ export type Doc = {
   unit: string | null;
   asal_surat: string | null;
   disposisi: string | null;
+  tanggal_surat: string | null;
 };
 
 let handle: Promise<Database> | null = null;
@@ -38,11 +39,12 @@ export async function findByHash(sha256: string): Promise<Doc | null> {
   return rows[0] ?? null;
 }
 
-export async function insertDocument(doc: Doc, ignoreConflicts = false): Promise<void> {
+/** Returns how many rows were really written; `INSERT OR IGNORE` gives 0 when skipped. */
+export async function insertDocument(doc: Doc, ignoreConflicts = false): Promise<number> {
   const conn = await db();
   const verb = ignoreConflicts ? "INSERT OR IGNORE" : "INSERT";
-  await conn.execute(
-    `${verb} INTO documents (id, title, filename, rel_path, kind, size_bytes, sha256, added_at, nomor_surat, unit, asal_surat, disposisi) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+  const result = await conn.execute(
+    `${verb} INTO documents (id, title, filename, rel_path, kind, size_bytes, sha256, added_at, nomor_surat, unit, asal_surat, disposisi, tanggal_surat) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
     [
       doc.id,
       doc.title,
@@ -56,8 +58,10 @@ export async function insertDocument(doc: Doc, ignoreConflicts = false): Promise
       doc.unit,
       doc.asal_surat,
       doc.disposisi,
+      doc.tanggal_surat,
     ],
   );
+  return result.rowsAffected;
 }
 
 export async function setDocumentFile(
@@ -79,7 +83,7 @@ export async function deleteDocument(id: string): Promise<void> {
 export async function updateDocument(doc: Doc): Promise<void> {
   const conn = await db();
   await conn.execute(
-    "UPDATE documents SET title = $1, kind = $2, nomor_surat = $3, unit = $4, asal_surat = $5, disposisi = $6 WHERE id = $7",
+    "UPDATE documents SET title = $1, kind = $2, nomor_surat = $3, unit = $4, asal_surat = $5, disposisi = $6, tanggal_surat = $7 WHERE id = $8",
     [
       doc.title,
       doc.kind,
@@ -87,6 +91,7 @@ export async function updateDocument(doc: Doc): Promise<void> {
       doc.unit,
       doc.asal_surat,
       doc.disposisi,
+      doc.tanggal_surat,
       doc.id,
     ],
   );

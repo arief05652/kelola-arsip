@@ -7,8 +7,15 @@ import PdfViewer from "./components/PdfViewer";
 import Sidebar from "./components/Sidebar";
 import Toast from "./components/Toast";
 import { insertDocument, listDocuments, type Doc, type LetterKind } from "./lib/db";
-import { removeDocument, readBackupArchive, revealDocumentFile, saveDocumentCopy } from "./lib/documents";
-import { formatDate } from "./lib/format";
+import {
+  cleanupOrphanFiles,
+  removeDocument,
+  readBackupArchive,
+  revealDocumentFile,
+  saveDocumentCopy,
+} from "./lib/documents";
+import { docDay } from "./lib/docs";
+import { formatDate, formatLetterDate, localDay } from "./lib/format";
 import type { DocActions, Page } from "./lib/types";
 import Dashboard from "./pages/Dashboard";
 import Letters from "./pages/Letters";
@@ -39,6 +46,28 @@ export default function App() {
   useEffect(() => {
     refresh().catch((error) => setToast(`Gagal memuat data: ${String(error)}`));
   }, [refresh]);
+
+  const copyMetadata = useCallback((doc: Doc, no: number) => {
+    void (async () => {
+      const lines = [
+        `No: ${no}`,
+        `Tanggal: ${
+          doc.tanggal_surat ? formatLetterDate(doc.tanggal_surat) : formatDate(doc.added_at)
+        }`,
+        `Nomor Surat: ${doc.nomor_surat ?? "-"}`,
+        `Perihal: ${doc.title}`,
+        `${doc.kind === "keluar" ? "Kepada" : "Asal Surat"}: ${doc.asal_surat ?? "-"}`,
+      ];
+      if (doc.unit) lines.push(`Bidang: ${doc.unit}`);
+      lines.push(`${doc.kind === "keluar" ? "Pengolah" : "Disposisi"}: ${doc.disposisi ?? "-"}`);
+      try {
+        await navigator.clipboard.writeText(lines.join("\n"));
+        setToast("Metadata disalin ke clipboard");
+      } catch (error) {
+        setToast(`Gagal menyalin: ${String(error)}`);
+      }
+    })();
+  }, []);
 
   const actions: DocActions = useMemo(
     () => ({
@@ -72,25 +101,7 @@ export default function App() {
           setToast(`Gagal membuka folder: ${String(error)}`),
         );
       },
-      onCopy: (doc, no) => {
-        void (async () => {
-          const lines = [
-            `No: ${no}`,
-            `Tanggal: ${formatDate(doc.added_at)}`,
-            `Nomor Surat: ${doc.nomor_surat ?? "-"}`,
-            `Perihal: ${doc.title}`,
-            `${doc.kind === "keluar" ? "Kepada" : "Asal Surat"}: ${doc.asal_surat ?? "-"}`,
-          ];
-          if (doc.unit) lines.push(`Bidang: ${doc.unit}`);
-          lines.push(`${doc.kind === "keluar" ? "Pengolah" : "Disposisi"}: ${doc.disposisi ?? "-"}`);
-          try {
-            await navigator.clipboard.writeText(lines.join("\n"));
-            setToast("Metadata disalin ke clipboard");
-          } catch (error) {
-            setToast(`Gagal menyalin: ${String(error)}`);
-          }
-        })();
-      },
+      onCopy: copyMetadata,
       onDelete: (doc) => {
         void (async () => {
           try {
@@ -113,7 +124,7 @@ export default function App() {
         })();
       },
     }),
-    [refresh],
+    [copyMetadata, refresh],
   );
 
   const handleBackup = useCallback(async () => {
@@ -124,8 +135,8 @@ export default function App() {
       setToast(`Gagal memuat data: ${String(error)}`);
       return;
     }
-    const dates = rows.map((row) => row.added_at.slice(0, 10)).sort();
-    const today = new Date().toISOString().slice(0, 10);
+    const dates = rows.map((row) => docDay(row)).sort();
+    const today = localDay(new Date());
     const first = dates[0] ?? today;
     const last = dates[dates.length - 1] ?? today;
     const suffix = first === last ? first : `${first}_sd_${last}`;
@@ -174,11 +185,23 @@ export default function App() {
     setBusy(true);
     try {
       const rows = await listDocuments();
+      let removed = 0;
+      let failed = 0;
       for (const row of rows) {
-        await removeDocument(row);
+        try {
+          await removeDocument(row);
+          removed += 1;
+        } catch {
+          failed += 1;
+        }
       }
+      const cleaned = await cleanupOrphanFiles();
       await refresh();
-      setToast(`${rows.length} dokumen dihapus. Arsip siap dipakai dari awal.`);
+      const base =
+        failed === 0
+          ? `${removed} dokumen dihapus. Arsip siap dipakai dari awal.`
+          : `${removed} dokumen dihapus, ${failed} gagal dihapus. Jalankan lagi untuk sisanya.`;
+      setToast(cleaned > 0 ? `${base} ${cleaned} file tanpa data dibersihkan.` : base);
     } catch (error) {
       setToast(`Gagal menghapus data: ${String(error)}`);
     } finally {
@@ -220,13 +243,54 @@ export default function App() {
     setBusy(true);
     try {
       const rows = await invoke<Doc[]>("restore_archive", { sourcePath: source });
+      let added = 0;
+      let skipped = 0;
+      let failed = 0;
       for (const row of rows) {
-        await insertDocument(row, true);
+        try {
+          const written = await insertDocument(row, true);
+          if (written > 0) added += 1;
+          else skipped += 1;
+        } catch {
+          failed += 1;
+        }
       }
+      // Files written for rows that were skipped are not referenced by anything.
+      const cleaned = await cleanupOrphanFiles();
       await refresh();
-      setToast(`${rows.length} dokumen dipulihkan`);
+      const parts = [`${added} dokumen dipulihkan`];
+      if (skipped > 0) parts.push(`${skipped} sudah ada`);
+      if (failed > 0) parts.push(`${failed} gagal`);
+      if (cleaned > 0) parts.push(`${cleaned} file tanpa data dibersihkan`);
+      setToast(parts.join(", "));
     } catch (error) {
       setToast(`Gagal memulihkan: ${String(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  }, [refresh]);
+
+  const handleCleanup = useCallback(async () => {
+    const approved = await confirm(
+      "Hapus file PDF di folder arsip yang tidak dipakai dokumen mana pun? File yang masih terhubung tidak disentuh.",
+      {
+        title: "Bersihkan file tanpa data",
+        kind: "warning",
+        okLabel: "Bersihkan",
+        cancelLabel: "Batal",
+      },
+    );
+    if (!approved) return;
+
+    setBusy(true);
+    try {
+      const removed = await cleanupOrphanFiles();
+      await refresh();
+      setToast(
+        removed === 0 ? "Tidak ada file tanpa data" : `${removed} file tanpa data dibersihkan`,
+      );
+    } catch (error) {
+      setToast(`Gagal membersihkan file: ${String(error)}`);
     } finally {
       setBusy(false);
     }
@@ -281,6 +345,7 @@ export default function App() {
                 onRestore={handleRestore}
                 onPurge={handlePurge}
                 onOpenBackup={handleOpenBackup}
+                onCleanup={handleCleanup}
               />
             )}
           </div>
@@ -317,6 +382,7 @@ export default function App() {
         <BackupViewer
           name={backupPreview.name}
           rows={backupPreview.rows}
+          onCopy={copyMetadata}
           onClose={() => setBackupPreview(null)}
         />
       )}

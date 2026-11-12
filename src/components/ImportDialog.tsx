@@ -1,8 +1,13 @@
 import { useEffect, useState } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { open } from "@tauri-apps/plugin-dialog";
+import { confirm, open } from "@tauri-apps/plugin-dialog";
 import { FileText, Loader2, Upload, X } from "lucide-react";
-import { insertDocument, updateDocument, type Doc, type LetterKind } from "../lib/db";
+import {
+  insertDocument,
+  updateDocument,
+  type Doc,
+  type LetterKind,
+} from "../lib/db";
 import { importLetter, replaceDocumentFile } from "../lib/documents";
 
 type Props = {
@@ -35,10 +40,44 @@ export default function ImportDialog({
   const [unit, setUnit] = useState(doc?.unit ?? defaultUnit ?? "");
   const [asalSurat, setAsalSurat] = useState(doc?.asal_surat ?? "");
   const [disposisi, setDisposisi] = useState(doc?.disposisi ?? "");
+  const [tanggalSurat, setTanggalSurat] = useState(doc?.tanggal_surat ?? "");
   const [filePath, setFilePath] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const dirty =
+    filePath !== null ||
+    title !== (doc?.title ?? "") ||
+    nomorSurat !== (doc?.nomor_surat ?? "") ||
+    kind !== (doc?.kind ?? defaultKind) ||
+    unit !== (doc?.unit ?? defaultUnit ?? "") ||
+    asalSurat !== (doc?.asal_surat ?? "") ||
+    disposisi !== (doc?.disposisi ?? "") ||
+    tanggalSurat !== (doc?.tanggal_surat ?? "");
+
+  async function requestClose() {
+    if (saving) return;
+    if (!dirty) {
+      onClose();
+      return;
+    }
+    const approved = await confirm("Tutup tanpa menyimpan? Isian yang belum disimpan akan hilang.", {
+      title: "Tutup dialog",
+      kind: "warning",
+      okLabel: "Tutup",
+      cancelLabel: "Batal",
+    });
+    if (approved) onClose();
+  }
+
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") void requestClose();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
 
   // Tauri intercepts OS drag-and-drop, so the HTML5 drop event never fires.
   useEffect(() => {
@@ -103,6 +142,7 @@ export default function ImportDialog({
           unit: unit.trim() || null,
           asal_surat: asalSurat.trim() || null,
           disposisi: disposisi.trim() || null,
+          tanggal_surat: tanggalSurat || null,
         });
         onImported(`Perubahan dokumen${fileNote} disimpan`);
         onClose();
@@ -124,6 +164,7 @@ export default function ImportDialog({
           unit: unit.trim() || null,
           asal_surat: asalSurat.trim() || null,
           disposisi: disposisi.trim() || null,
+          tanggal_surat: tanggalSurat || null,
         });
         onImported("Dokumen ditambahkan tanpa file PDF");
         onClose();
@@ -136,12 +177,15 @@ export default function ImportDialog({
         unit,
         asalSurat,
         disposisi,
+        tanggalSurat,
         kind,
       });
       onImported(
-        result === "skipped"
-          ? "Dokumen ini sudah ada di arsip"
-          : "Dokumen berhasil ditambahkan",
+        result === "restored"
+          ? "File PDF dikembalikan ke dokumen yang sudah ada"
+          : result === "skipped"
+            ? "Dokumen ini sudah ada di arsip"
+            : "Dokumen berhasil ditambahkan",
       );
       onClose();
     } catch (cause) {
@@ -166,7 +210,7 @@ export default function ImportDialog({
           </h2>
           <button
             type="button"
-            onClick={onClose}
+            onClick={() => void requestClose()}
             aria-label="Tutup"
             className="grid size-6 place-items-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-600"
           >
@@ -215,6 +259,19 @@ export default function ImportDialog({
               />
             </label>
           </div>
+
+          <label className="block">
+            <span className="text-[11px] font-medium text-slate-500">
+              Tanggal Surat
+              <span className="ml-1 font-normal text-slate-400">(opsional)</span>
+            </span>
+            <input
+              type="date"
+              value={tanggalSurat}
+              onChange={(event) => setTanggalSurat(event.target.value)}
+              className="mt-1 w-full rounded-md border border-slate-200 px-2.5 py-1.5 text-xs text-slate-700 outline-none focus:border-blue-400"
+            />
+          </label>
 
           <div className="grid grid-cols-2 gap-3">
             {kind === "keluar" && (
@@ -331,7 +388,7 @@ export default function ImportDialog({
         <footer className="flex items-center justify-end gap-2 border-t border-slate-100 px-5 py-3">
           <button
             type="button"
-            onClick={onClose}
+            onClick={() => void requestClose()}
             className="rounded-md px-3 py-1.5 text-[11px] font-semibold text-slate-500 hover:bg-slate-100"
           >
             Batal

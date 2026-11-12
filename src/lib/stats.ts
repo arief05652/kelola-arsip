@@ -1,4 +1,5 @@
 import type { Doc } from "./db";
+import { docMonth } from "./docs";
 import { monthKey, monthLabel } from "./format";
 
 export type MonthBucket = {
@@ -14,7 +15,7 @@ export function countByKind(docs: Doc[], kind: Doc["kind"]): number {
 
 export function countThisMonth(docs: Doc[]): number {
   const key = monthKey(new Date());
-  return docs.filter((doc) => doc.added_at.slice(0, 7) === key).length;
+  return docs.filter((doc) => docMonth(doc) === key).length;
 }
 
 export function totalBytes(docs: Doc[]): number {
@@ -36,7 +37,7 @@ export function yearSeries(docs: Doc[], year = new Date().getFullYear()): MonthB
 
   const byKey = new Map(buckets.map((bucket) => [bucket.key, bucket]));
   for (const doc of docs) {
-    const bucket = byKey.get(doc.added_at.slice(0, 7));
+    const bucket = byKey.get(docMonth(doc));
     if (bucket) bucket[doc.kind] += 1;
   }
 
@@ -59,7 +60,7 @@ export function monthSeries(docs: Doc[], months: number): MonthBucket[] {
 
   const byKey = new Map(buckets.map((bucket) => [bucket.key, bucket]));
   for (const doc of docs) {
-    const bucket = byKey.get(doc.added_at.slice(0, 7));
+    const bucket = byKey.get(docMonth(doc));
     if (bucket) bucket[doc.kind] += 1;
   }
 

@@ -11,7 +11,7 @@ import {
   Trash2,
 } from "lucide-react";
 import type { Doc } from "../lib/db";
-import { formatDate } from "../lib/format";
+import { formatDate, formatLetterDate } from "../lib/format";
 
 type Props = {
   docs: Doc[];
@@ -56,18 +56,17 @@ export default function DocumentTable({
   // A row counts as having a file only when the PDF is really on disk.
   useEffect(() => {
     let cancelled = false;
-    Promise.all(
-      docs.map(async (doc) => {
-        if (!doc.rel_path) return [doc.id, false] as const;
-        const found = await invoke<boolean>("doc_exists", { relPath: doc.rel_path }).catch(
-          () => false,
+    invoke<string[]>("existing_doc_files")
+      .then((names) => {
+        if (cancelled) return;
+        const present = new Set(names);
+        setMissing(
+          new Set(
+            docs.filter((doc) => !doc.rel_path || !present.has(doc.rel_path)).map((doc) => doc.id),
+          ),
         );
-        return [doc.id, found] as const;
-      }),
-    ).then((pairs) => {
-      if (cancelled) return;
-      setMissing(new Set(pairs.filter(([, found]) => !found).map(([id]) => id)));
-    });
+      })
+      .catch(() => undefined);
     return () => {
       cancelled = true;
     };
@@ -146,7 +145,7 @@ export default function DocumentTable({
                 </span>
               </td>
               <td className="whitespace-nowrap px-3 py-3 text-slate-500">
-                {formatDate(doc.added_at)}
+                {doc.tanggal_surat ? formatLetterDate(doc.tanggal_surat) : formatDate(doc.added_at)}
               </td>
               <td className="whitespace-nowrap px-3 py-3 text-slate-500">
                 {doc.nomor_surat || EMPTY}

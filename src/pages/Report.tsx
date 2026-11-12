@@ -1,7 +1,11 @@
-import { Download, FolderOpen, Loader2, Trash2, Upload } from "lucide-react";
+import { useState } from "react";
+import { Download, Eraser, FolderOpen, Loader2, Trash2, Upload } from "lucide-react";
 import type { Doc } from "../lib/db";
 import { formatBytes } from "../lib/format";
 import { countByKind, totalBytes, yearSeries } from "../lib/stats";
+import Pagination from "../components/Pagination";
+
+const PAGE_SIZE = 10;
 
 const longLabel = (key: string) =>
   new Intl.DateTimeFormat("id-ID", { month: "long", year: "numeric" }).format(
@@ -15,6 +19,7 @@ type Props = {
   onRestore: () => void;
   onPurge: () => void;
   onOpenBackup: () => void;
+  onCleanup: () => void;
 };
 
 export default function Report({
@@ -24,7 +29,9 @@ export default function Report({
   onRestore,
   onPurge,
   onOpenBackup,
+  onCleanup,
 }: Props) {
+  const [page, setPage] = useState(1);
   const year = new Date().getFullYear();
   const rows = yearSeries(docs, year)
     .map((bucket) => ({
@@ -34,14 +41,15 @@ export default function Report({
     }))
     .reverse();
 
-  const totals = rows.reduce(
-    (acc, row) => ({
-      masuk: acc.masuk + row.masuk,
-      keluar: acc.keluar + row.keluar,
-      total: acc.total + row.total,
-    }),
-    { masuk: 0, keluar: 0, total: 0 },
-  );
+  const totals = rows.reduce((acc, row) => ({
+    masuk: acc.masuk + row.masuk,
+    keluar: acc.keluar + row.keluar,
+    total: acc.total + row.total,
+  }), { masuk: 0, keluar: 0, total: 0 });
+
+  const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+  const safePage = Math.min(page, pageCount);
+  const visible = rows.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
 
   return (
     <div className="space-y-4">
@@ -81,6 +89,16 @@ export default function Report({
           >
             <Trash2 className="size-3.5" />
             Hapus Semua Data
+          </button>
+          <button
+            type="button"
+            onClick={onCleanup}
+            disabled={busy}
+            title="Hapus file PDF di folder arsip yang tidak dipakai dokumen mana pun"
+            className="flex items-center gap-1.5 rounded-md bg-slate-100 px-3 py-1.5 text-[11px] font-semibold text-slate-700 hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <Eraser className="size-3.5" />
+            Bersihkan File
           </button>
         </div>
       </section>
@@ -140,7 +158,7 @@ export default function Report({
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {rows.map((row) => (
+            {visible.map((row) => (
               <tr key={row.key} className="hover:bg-slate-50/60">
                 <td className="px-4 py-2.5 capitalize text-slate-600">{row.label}</td>
                 <td className="px-3 py-2.5 text-slate-500">{row.masuk}</td>
@@ -160,6 +178,15 @@ export default function Report({
             </tr>
           </tfoot>
         </table>
+
+        <Pagination
+          page={safePage}
+          pageCount={pageCount}
+          onPage={setPage}
+          shown={visible.length}
+          total={rows.length}
+          start={(safePage - 1) * PAGE_SIZE + 1}
+        />
       </section>
     </div>
   );
